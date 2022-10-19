@@ -1,0 +1,8 @@
+original
+1
+aabbbb
+aabbbb
+cabbbb
+cccdbe
+fffdee
+fffdee
