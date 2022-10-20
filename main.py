@@ -1,3 +1,4 @@
+import itertools
 import string
 from collections import defaultdict
 from itertools import combinations
@@ -15,14 +16,18 @@ UNICODE_SQUARE = '■'
 
 class Tile:
     #
-    def __init__(self, pos, section, value):
+    def __init__(self, pos, section, value, size):
         if isinstance(pos, tuple):
             self.row, self.col = pos
         else:
             raise ValueError('pos is not a tuple')
 
         self.section = section
-        self.value = value
+        self._value = value
+        self.hash = None
+        self.update_hash()
+        self.bit = 1 << (self.col + self.row * size)
+        self.size = size
 
     def __str__(self):
         return str(self.row + 1) + string.ascii_uppercase[self.col]
@@ -35,13 +40,25 @@ class Tile:
             self.section == other.section
         )
 
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value
+        self.update_hash()
+
+    def update_hash(self):
+        self.hash = hash((self.row, self.col, self.value, self.section))
+
     def __hash__(self):
-        return hash((self.row, self.col, self.value, self.section))
+        return self.hash
     
     __repr__ = __str__
 
     def copy(self):
-        return Tile((self.row, self.col), self.section, self.value)
+        return Tile((self.row, self.col), self.section, self.value, self.size)
     
     def empty(self):
         return self.value == '.'
@@ -51,6 +68,10 @@ class Group:
     def __init__(self, tiles, stars):
         self.tiles = set(tiles)
         self.stars = stars
+        bits = 0
+        for tile in tiles:
+            bits |= tile.bit
+        self.bits = bits
     
     # true if this group is a subset of the given list of tiles
     def is_subset(self, tiles):
@@ -73,14 +94,19 @@ class Group:
     def __eq__(self, other):
         return self.tiles == other.tiles and self.stars == other.stars
     
-    def remove_tile(self, tile):
+    def remove(self, tile):
         try:
             self.tiles.remove(tile)
         except KeyError:
             pass
+        self.bits &= ~tile.bit
+
+    def add(self, tile):
+        self.tiles.add(tile)
+        self.bits |= tile.bit
 
     def __hash__(self):
-        return hash(tuple(self.tiles))
+        return hash(self.bits)
 
     def __repr__(self):
         return f'Group({self.tiles}, {self.stars})'
@@ -158,7 +184,7 @@ class Puzzle:
 
         self.board = [
             [
-                Tile((row, col), section_map[row][col], puzzle_state[row][col])
+                Tile((row, col), section_map[row][col], puzzle_state[row][col], self.size)
                 for col in range(self.size)
             ] for row in range(self.size)
         ]
@@ -186,8 +212,8 @@ class Puzzle:
         for tiles in sections.values():
             self.groups.append(Group(tiles, self.stars))
 
-        # for group in self.groups:
-        #     print(group, get_2x2_groups(group.tiles))
+        for group in self.groups:
+            print(group, group.bits)
 
     def groups_containing_tile(self, tile):
         for group in self.groups:
@@ -241,50 +267,77 @@ class Puzzle:
                     yield tile
                     break
 
-    def multi_group_exclusion_helper(self, current, tile_set, remaining_groups, stars):
+    def find_all_2x2_clobbering_helper(self, tiles):
+        # print(tiles)
+        ans = []
+        for group in self.groups:
+            disjoint = group.tiles - tiles
+            num_2x2 = len(get_2x2_groups(disjoint))
+            if num_2x2 < group.stars:
+                ans.append(group)
+        return ans
+
+    def find_all_2x2_clobbering(self):
+        for row in self.board:
+            for tile in row:
+                if not tile.empty():
+                    continue
+                for group in self.find_all_2x2_clobbering_helper(self.all_affected(tile)):
+                    yield tile
+                    break
+
+    def multi_group_exclusion_helper(self, current, tile_set_bits, remaining_groups, stars):
+        self.checks += 1
         current_sum = sum((group.stars for group in current))
         if current_sum == stars:
-            return current
+            yield current
+            return
         possible_groups = []
-        current_union = set()
+        current_union_bits = 0
         for group in current:
-            current_union |= group.tiles
+            current_union_bits |= group.bits
+        to_remove = []
+        for group in remaining_groups:
+            if group.bits & current_union_bits != 0:
+                to_remove.append(group)
+        for group in to_remove:
+            remaining_groups.remove(group)
 
         for group in remaining_groups:
             # fits in the required stars AND is disjoint with all other current small groups AND is a subset of the big groups
-            if group.stars <= stars and len(group.tiles & current_union) == 0 and group.tiles < tile_set:
+            if group.stars <= stars and group.bits & current_union_bits == 0 and group.bits & tile_set_bits == group.bits:
                 possible_groups.append(group)
         for group in possible_groups:
             remaining_groups.remove(group)
-            yield from self.multi_group_exclusion_helper(current + [group], tile_set, remaining_groups, stars)
+            yield from self.multi_group_exclusion_helper(current + [group], tile_set_bits, remaining_groups, stars)
+            remaining_groups.add(group)
+
+        for group in to_remove:
             remaining_groups.add(group)
 
 
     
     def find_multi_group_exclusions(self, depth):
         group_exclusions = []
-        checks = 0
+        self.checks = 0
         for group_set_big in combinations(self.groups, depth):
             remaining_groups = self.groups.copy()
             for group in group_set_big:
                 remaining_groups.remove(group)
-            tile_set = group_union(group_set_big)
+            tile_set_bits = 0
+            for group in group_set_big:
+                tile_set_bits |= group.bits
+            #num_tiles = tile_set_bits.bit_count()
+            #to_remove = []
+            #for group in remaining_groups:
+            #    if len(group.tiles) > num_tiles:
+            #        to_remove.append(group)
+            #for group in to_remove:
+            #    remaining_groups.remove(group)
             big_group_stars = sum((group.stars for group in group_set_big))
             
-            for group_set_small in combinations(remaining_groups, depth):
-                small_group_stars = sum((group.stars for group in group_set_small))
-                checks += 1
-                if len(group_conjunction(group_set_small)) > 0:
-                    continue
-                if big_group_stars != small_group_stars:
-                    continue
-                for group2 in group_set_small:
-                    if not group2.is_subset(tile_set):
-                        break
-                else:
-                    group_set_big_copy = [group.copy() for group in group_set_big]
-                    group_set_small_copy = [group.copy() for group in group_set_small]
-                    group_exclusions.append((group_set_big_copy, group_set_small_copy))
+            for group_set_small in self.multi_group_exclusion_helper([], tile_set_bits, set(remaining_groups), big_group_stars):
+                group_exclusions.append((group_set_big, group_set_small))
 
         found = 0
         for big, small in group_exclusions:
@@ -295,7 +348,7 @@ class Puzzle:
                 for tile in disjoint:
                     original_tiles_list.append(self.board[tile.row][tile.col])
                 self.eliminate_tiles(original_tiles_list)
-        return found, checks
+        return found, self.checks
 
     def copy(self):
         puzzle = Puzzle()
@@ -344,7 +397,7 @@ class Puzzle:
     def eliminate_tiles(self, tiles):
         for group in self.groups:
             for tile in tiles:
-                group.remove_tile(tile)
+                group.remove(tile)
         
         for tile in tiles:
             tile.value = 'x'
@@ -389,6 +442,25 @@ class Puzzle:
             self.groups.remove(group)
         return ans
 
+    def check_solution_validity(self):
+        section_stars = {string.ascii_lowercase[i]: 0 for i in range(self.size)}
+        row_stars = {r: 0 for r in range(self.size)}
+        col_stars = row_stars.copy()
+        for row in self.board:
+            for tile in row:
+                if tile.empty():
+                    return False
+                elif tile.value == '.':
+                    continue
+                section_stars[tile.section] += 1
+                row_stars[tile.row] += 1
+                col_stars[tile.col] += 1
+
+        for v in itertools.chain(section_stars.values(), row_stars.values(), col_stars.values()):
+            if v != self.stars:
+                return False
+        return True
+
 
     def solve(self):
         self.init_groups()
@@ -399,7 +471,7 @@ class Puzzle:
             old_puzzle = self.copy()
 
             if len(self.groups) == 0:
-                print('Puzzle is solved, stopping')
+                print('Puzzle is solved with a' + ('n invalid' if not self.check_solution_validity() else ' valid') + ' solution')
                 break
 
             print('looking for solved groups... ', end='')
@@ -416,16 +488,22 @@ class Puzzle:
                 self.eliminate_tiles(clobbering)
                 continue
 
-            print(f'looking for level 1 multi-group exclusions... ', end='')
-            num_exclusions, checks = self.find_multi_group_exclusions(1)
-            print(f'{num_exclusions} exclusions in {checks} checks')
-            if num_exclusions > 0:
+            found = False
+            for level in range(1, 3):
+                print(f'looking for level {level} multi-group exclusions... ', end='')
+                num_exclusions, checks = self.find_multi_group_exclusions(level)
+                print(f'{num_exclusions} exclusions in {checks} checks')
+                if num_exclusions > 0:
+                    found = True
+                    break
+            if found:
                 continue
 
-            print(f'looking for level 2 multi-group exclusions... ', end='')
-            num_exclusions, checks = self.find_multi_group_exclusions(2)
-            print(f'{num_exclusions} exclusions in {checks} checks')
-            if num_exclusions > 0:
+            print('looking for 2x2 clobbering... ', end='')
+            clobbering = list(self.find_all_2x2_clobbering())
+            print(f'{len(clobbering)} clobbering')
+            if len(clobbering) > 0:
+                self.eliminate_tiles(clobbering)
                 continue
 
             print('Applying 2x2 rule...', end='')
@@ -433,6 +511,17 @@ class Puzzle:
             print(f'{num_2x2} groups split')
             if num_2x2 > 0:
                 print(self.groups)
+                continue
+
+            found = False
+            for level in range(3, 4):
+                print(f'looking for level {level} multi-group exclusions... ', end='')
+                num_exclusions, checks = self.find_multi_group_exclusions(level)
+                print(f'{num_exclusions} exclusions in {checks} checks')
+                if num_exclusions > 0:
+                    found = True
+                    break
+            if found:
                 continue
             
             print("No rules to apply, giving up")
