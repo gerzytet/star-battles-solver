@@ -45,7 +45,7 @@ class Group:
         return f'Group({self.tiles}, {self.stars})'
 
     def empty(self):
-        return len(self.tiles) == 0
+        return len(self.tiles) == 0 and self.stars == 0
 
     def contains(self, tile):
         return tile in self.tiles

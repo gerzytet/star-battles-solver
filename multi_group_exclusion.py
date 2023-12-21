@@ -109,7 +109,6 @@ def generate_row_combinations(buckets, depth, last_was_zero, pos):
                                                                                                       depth - i, i == 0,
                                                                                                       pos + 1)))
 
-
 def generate_common_big_groups(groups, depth, remaining_groups):
     rows = set()
     cols = set()
@@ -161,6 +160,7 @@ def generate_common_big_groups(groups, depth, remaining_groups):
     remaining_groups |= sections
 
 
+#depth: max number of stars
 def find_multi_group_exclusions(depth, puzzle, common=False, use_2x2=False, next_best_thing=False):
     global checks
     checks = 0

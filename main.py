@@ -8,6 +8,8 @@ from group import Group
 
 # Colors & Symbols for grid
 import utils
+from chain_reactions import apply_chains
+from tile import Tile
 
 SECTION_BGS = [
     40, 191, 218, 172, 63, 226, 45, 105, 249, 188
@@ -17,56 +19,6 @@ WHITE = 196
 UNICODE_STAR = "★"
 UNICODE_DOT = "·"
 UNICODE_SQUARE = '■'
-
-
-class Tile:
-    #
-    def __init__(self, pos, section, value, size):
-        if isinstance(pos, tuple):
-            self.row, self.col = pos
-        else:
-            raise ValueError('pos is not a tuple')
-
-        self.section = section
-        self._value = value
-        self.hash = None
-        self.update_hash()
-        self.bit = 1 << (self.col + self.row * size)
-        self.size = size
-
-    def __str__(self):
-        return str(self.row + 1) + string.ascii_uppercase[self.col]
-
-    def __eq__(self, other):
-        return (
-                self.row == other.row and
-                self.col == other.col and
-                self.value == other.value and
-                self.section == other.section
-        )
-
-    @property
-    def value(self):
-        return self._value
-
-    @value.setter
-    def value(self, value):
-        self._value = value
-        self.update_hash()
-
-    def update_hash(self):
-        self.hash = hash((self.row, self.col, self.value, self.section))
-
-    def __hash__(self):
-        return self.hash
-
-    __repr__ = __str__
-
-    def copy(self):
-        return Tile((self.row, self.col), self.section, self.value, self.size)
-
-    def empty(self):
-        return self.value == '.'
 
 # return a set of all tiles in all the groups passed
 def group_conjunction(groups):
@@ -253,7 +205,7 @@ class Puzzle:
                 ans += 1
                 star_tiles |= group.tiles
                 self.place_stars_on_tiles(group.tiles.copy())
-        return len(star_tiles)
+        return star_tiles
 
     def apply_2x2_rule(self):
         ans = 0
@@ -295,6 +247,42 @@ class Puzzle:
         # TODO: make sure no stars touch
         return True
 
+    def check_validity(self):
+        section_stars = {string.ascii_lowercase[i]: 0 for i in range(self.size)}
+        row_stars = {r: 0 for r in range(self.size)}
+        col_stars = row_stars.copy()
+        for row in self.board:
+            for tile in row:
+                if tile.value == '*':
+                    section_stars[tile.section] += 1
+                    row_stars[tile.row] += 1
+                    col_stars[tile.col] += 1
+
+        #for v in itertools.chain(section_stars.values(), row_stars.values(), col_stars.values()):
+        #    if v > self.stars:
+        #        return False
+
+        for section in section_stars:
+            if section_stars[section] > self.stars:
+                bg_color = SECTION_BGS[(ord(section) - ord('a')) % len(SECTION_BGS)]
+                return False, f'Too many stars in section \033[48;5;{bg_color}m{section}\033[0m'
+
+        for row in range(self.size):
+            if row_stars[row] > self.stars:
+                return False, f'Too many stars in row {row + 1}'
+
+        for col in range(self.size):
+            if row_stars[col] > self.stars:
+                return False, f'Too many stars in column {col + 1}'
+
+        for group in self.groups:
+            if rules_2x2.get_num_2x2(group.tiles, group.bits) < group.stars:
+                #if group.is_row():
+                #    return False, f'{group.row_number()}'
+                return False, f'Not enough room for stars in group {group}'
+
+        return True, 'Flase eggrt gkole'
+
     def update_all_groups(self):
         for group in self.groups:
             self.all_groups.add(group.copy())
@@ -309,13 +297,15 @@ class Puzzle:
             input('Press Enter to step...')
             old_puzzle = self.copy()
 
+            #print(f'Validity: {self.check_validity()[0]}')
+
             if len(self.groups) == 0:
                 print('Puzzle is solved with a' + (
                     'n invalid' if not self.check_solution_validity() else ' valid') + ' solution')
                 break
 
             print('looking for solved groups... ', end='')
-            num_solved = self.place_star_solved_groups()
+            num_solved = len(self.place_star_solved_groups())
             print(f'{num_solved} solved groups')
             if num_solved > 0:
                 continue
@@ -332,6 +322,12 @@ class Puzzle:
             print(f'{num_2x2} groups split')
             if num_2x2 > 0:
                 print(self.groups)
+                continue
+
+            print('Looking for chain reactions...', end='')
+            result = apply_chains(self)
+            if result:
+                print('Chain found!')
                 continue
 
             found_exclusion = False
@@ -411,7 +407,7 @@ def convert_task(task):
 def main():
     puzzle_name = input("Enter name of puzzle file without extension: ")
     print(f'Loading puzzle from {puzzle_name}.txt...')
-    with open(puzzle_name + '.txt') as puzzle_file:
+    with open(f'puzzles/{puzzle_name}.txt') as puzzle_file:
         puzzle_format = puzzle_file.readline().strip()
         stars = int(puzzle_file.readline().strip())
         if puzzle_format == 'online':
